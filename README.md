@@ -1,6 +1,6 @@
 ## Solana Token Sniper
 
-Forked from digbenjamins/SolanaTokenSniper
+Forked from [DigitalBenjamins](https://github.com/digbenjamins/SolanaTokenSniper/)
 
 ### Update Log
 - 03.02.2024: Improved Simulation mode with Overall PNL
