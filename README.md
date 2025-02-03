@@ -8,5 +8,6 @@ Forked from [DigitalBenjamins](https://github.com/digbenjamins/SolanaTokenSniper
 ### Known issues
 
 - When buying somethines tokenData.price is null
-- Pricetracker is completley out of sync, currently its better to sell manually
+- Pricetracker is completley out of sync, currently its better to sell manually.
+    Thanks to this, in Sumulation mode the results are useless as for now
 
