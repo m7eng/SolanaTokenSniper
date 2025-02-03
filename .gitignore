@@ -33,6 +33,7 @@ next-env.d.ts
 
 # not finished
 priceChecker.ts
+tokenPriceTest.ts
 
 # Project Personal Files
 holdings.db
