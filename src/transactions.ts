@@ -809,4 +809,4 @@ export async function createSellTransaction(solMint: string, tokenMint: string, 
       tx: null,
     };
   }
-}tokenSolFeePaidUSDC
+}
