@@ -67,9 +67,7 @@ async function processTransaction(signature: string): Promise<void> {
 
   // Check if simulation mode is enabled
   if (config.rug_check.simulation_mode) {
-    console.log("👀 Token not swapped. Simulation mode is enabled.");
-    console.log("🟢 Resuming looking for new tokens..\n");
-    return;
+    console.log("👀 Simulation mode is enabled. Token swap will be simulated.");  
   }
 
   // Add initial delay before first buy
@@ -86,7 +84,7 @@ async function processTransaction(signature: string): Promise<void> {
   // Output logs
   console.log("🚀 Swapping SOL for Token.");
   console.log("Swap Transaction: ", "https://solscan.io/tx/" + tx);
-
+  console.log("🟢 Resuming looking for new tokens...\n");
   // Fetch and store the transaction for tracking purposes
   const saveConfirmation = await fetchAndSaveSwapDetails(tx);
   if (!saveConfirmation) {

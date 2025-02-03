@@ -274,12 +274,22 @@ export async function createSwapTransaction(solMint: string, tokenMint: string):
     const latestBlockHash = await connection.getLatestBlockhash();
 
     // Execute the transaction
-    const rawTransaction = transaction.serialize();
-    const txid = await connection.sendRawTransaction(rawTransaction, {
-      skipPreflight: true, // If True, This will skip transaction simulation entirely.
-      maxRetries: 2,
-    });
+    let txid = "";
+    if (!config.rug_check.simulation_mode) {
+      const rawTransaction = transaction.serialize();
+      txid = await connection.sendRawTransaction(rawTransaction, {
+        skipPreflight: true, // If True, This will skip transaction simulation entirely.
+        maxRetries: 2,
+      });
+    } else {
 
+      // Simulate txid but put information for fetchAndSaveSwapDetails() in
+      txid = JSON.stringify({
+        tokenMint: tokenMint,
+        paidSol: config.swap.amount,
+      })
+
+    }
     // Return null when no tx was returned
     if (!txid) {
       console.log("🚫 No id received for sent raw transaction.");
@@ -289,20 +299,23 @@ export async function createSwapTransaction(solMint: string, tokenMint: string):
     if (txid) console.log("✅ Raw transaction id received.");
 
     // Fetch the current status of a transaction signature (processed, confirmed, finalized).
-    const conf = await connection.confirmTransaction({
-      blockhash: latestBlockHash.blockhash,
-      lastValidBlockHeight: latestBlockHash.lastValidBlockHeight,
-      signature: txid,
-    });
+    // Ignore this check in simulation mode
+    if (!config.rug_check.simulation_mode) {
+      const conf = await connection.confirmTransaction({
+        blockhash: latestBlockHash.blockhash,
+        lastValidBlockHeight: latestBlockHash.lastValidBlockHeight,
+        signature: txid,
+      });
 
-    if (txid) console.log("🔎 Checking transaction confirmation ...");
 
-    // Return null when an error occured when confirming the transaction
-    if (conf.value.err || conf.value.err !== null) {
-      console.log("🚫 Transaction confirmation failed.");
-      return null;
+      if (txid) console.log("🔎 Checking transaction confirmation ...");
+
+      // Return null when an error occured when confirming the transaction
+      if (conf.value.err || conf.value.err !== null) {
+        console.log("🚫 Transaction confirmation failed.");
+        return null;
+      }
     }
-
     return txid;
   } catch (error: any) {
     console.error("Error while signing and sending the transaction:", error.message);
@@ -357,14 +370,14 @@ export async function getRugCheckConfirmed(tokenMint: string): Promise<boolean> 
   const rugRisks = tokenReport.risks
     ? tokenReport.risks
     : [
-        {
-          name: "Good",
-          value: "",
-          description: "",
-          score: 0,
-          level: "good",
-        },
-      ];
+      {
+        name: "Good",
+        value: "",
+        description: "",
+        score: 0,
+        level: "good",
+      },
+    ];
 
   // Update topholders if liquidity pools are excluded
   if (config.rug_check.exclude_lp_from_topholders) {
@@ -496,38 +509,108 @@ export async function fetchAndSaveSwapDetails(tx: string): Promise<boolean> {
   const txUrl = process.env.HELIUS_HTTPS_URI_TX || "";
   const priceUrl = process.env.JUP_HTTPS_PRICE_URI || "";
   const rpcUrl = process.env.HELIUS_HTTPS_URI || "";
-
+  let swapTransactionData: SwapEventDetailsResponse;
   try {
-    const response = await axios.post<any>(
-      txUrl,
-      { transactions: [tx] },
-      {
-        headers: {
-          "Content-Type": "application/json",
-        },
-        timeout: 10000, // Timeout for each request
-      }
-    );
 
-    // Verify if we received tx reponse data
-    if (!response.data || response.data.length === 0) {
-      console.log("⛔ Could not fetch swap details: No response received from API.");
-      return false;
+    if (!config.rug_check.simulation_mode) {
+      const response = await axios.post<any>(
+        txUrl,
+        { transactions: [tx] },
+        {
+          headers: {
+            "Content-Type": "application/json",
+          },
+          timeout: 10000, // Timeout for each request
+        }
+      );
+
+      // Verify if we received tx reponse data
+      if (!response.data || response.data.length === 0) {
+        console.log("⛔ Could not fetch swap details: No response received from API.");
+        return false;
+      }
+
+      // Safely access the event information
+      const transactions: TransactionDetailsResponseArray = response.data;
+      swapTransactionData = {
+        programInfo: transactions[0]?.events.swap.innerSwaps[0].programInfo,
+        tokenInputs: transactions[0]?.events.swap.innerSwaps[0].tokenInputs,
+        tokenOutputs: transactions[0]?.events.swap.innerSwaps[0].tokenOutputs,
+        fee: transactions[0]?.fee,
+        slot: transactions[0]?.slot,
+        timestamp: transactions[0]?.timestamp,
+        description: transactions[0]?.description,
+      };
+      console.log(swapTransactionData)
+    } else {
+      const simulatedTransactionDetails = JSON.parse(tx);
+
+      //Get SOL price in USDC
+      const solMint = config.liquidity_pool.wsol_pc_mint;
+      const priceResponse = await axios.get<any>(priceUrl, {
+        params: {
+          ids: solMint,
+        },
+        timeout: config.tx.get_timeout,
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Get token price in USDC
+      const priceResponseToken = await axios.get<any>(priceUrl, {
+        params: {
+          ids: simulatedTransactionDetails.tokenMint,
+        },
+        timeout: config.tx.get_timeout,
+      });
+
+      const tokenData = priceResponseToken.data.data[simulatedTransactionDetails.tokenMint];
+      const solData = priceResponse.data.data[solMint];
+
+      // Calculate paid price in USDC
+      const paidUSDC = solData.price * simulatedTransactionDetails.paidSol / 1_000_000_000;
+ 
+      // Calculate token price in USDC
+      const tokenPriceUSDC = parseFloat(tokenData.price);
+ 
+
+      // Fake Transaction Data for Simulation
+      swapTransactionData = {
+        programInfo: {
+          source: "Simulation source",
+          account: "Simulation account",
+          programName: "Simulation programmName",
+          instructionName: "SwapEvent",
+        },
+        tokenInputs: [{
+          fromTokenAccount: "Simulation fromTokenAccount",
+          toTokenAccount: "Simulation toTokenAccount",
+          fromUserAccount: "Simulation fromUserAccount",
+          toUserAccount: "Simulation toUserAccount",
+          tokenAmount: simulatedTransactionDetails.paidSol / 1_000_000_000, // Solana paid
+          mint: "So11111111111111111111111111111111111111112",
+          tokenStandard: "Fungible",
+        }],
+        tokenOutputs: [{
+          fromTokenAccount: "Simulation fromTokenAccount",
+          toTokenAccount: "Simulation toTokenAccount",
+          fromUserAccount: "Simulation fromUserAccount",
+          toUserAccount: "Simulation toUserAccount",
+          tokenAmount: paidUSDC / tokenPriceUSDC, // Token recieved
+          mint: simulatedTransactionDetails.tokenMint, // The actual mint
+          tokenStandard: "Fungible",
+        }],
+        fee: 1004999, //Some fee, TBD: Better estimation instead of fixed
+        slot: 1337,
+        timestamp: Date.now(),
+        description: "Simulated a swap",
+      }
+
     }
 
-    // Safely access the event information
-    const transactions: TransactionDetailsResponseArray = response.data;
-    const swapTransactionData: SwapEventDetailsResponse = {
-      programInfo: transactions[0]?.events.swap.innerSwaps[0].programInfo,
-      tokenInputs: transactions[0]?.events.swap.innerSwaps[0].tokenInputs,
-      tokenOutputs: transactions[0]?.events.swap.innerSwaps[0].tokenOutputs,
-      fee: transactions[0]?.fee,
-      slot: transactions[0]?.slot,
-      timestamp: transactions[0]?.timestamp,
-      description: transactions[0]?.description,
-    };
 
-    // Get latest Sol Price
+
+    //Get SOL price in USDC
     const solMint = config.liquidity_pool.wsol_pc_mint;
     const priceResponse = await axios.get<any>(priceUrl, {
       params: {
@@ -536,11 +619,14 @@ export async function fetchAndSaveSwapDetails(tx: string): Promise<boolean> {
       timeout: config.tx.get_timeout,
     });
 
+    const solData = priceResponse.data.data[solMint];
+
     // Verify if we received the price response data
     if (!priceResponse.data.data[solMint]?.price) return false;
 
     // Calculate estimated price paid in sol
     const solUsdcPrice = priceResponse.data.data[solMint]?.price;
+
     const solPaidUsdc = swapTransactionData.tokenInputs[0].tokenAmount * solUsdcPrice;
     const solFeePaidUsdc = (swapTransactionData.fee / 1_000_000_000) * solUsdcPrice;
     const perTokenUsdcPrice = solPaidUsdc / swapTransactionData.tokenOutputs[0].tokenAmount;
@@ -587,30 +673,31 @@ export async function createSellTransaction(solMint: string, tokenMint: string, 
   const connection = new Connection(rpcUrl);
 
   try {
-    // Check token balance using RPC connection
-    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(myWallet.publicKey, {
-      mint: new PublicKey(tokenMint),
-    });
-
-    //Check if token exists in wallet with non-zero balance
-    const totalBalance = tokenAccounts.value.reduce((sum, account) => {
-      const tokenAmount = account.account.data.parsed.info.tokenAmount.amount;
-      return sum + BigInt(tokenAmount); // Use BigInt for precise calculations
-    }, BigInt(0));
-
-    // Verify returned balance
-    if (totalBalance <= 0n) {
-      await removeHolding(tokenMint).catch((err) => {
-        console.log("⛔ Database Error: " + err);
+    if (!config.rug_check.simulation_mode) {
+      // Check token balance using RPC connection
+      const tokenAccounts = await connection.getParsedTokenAccountsByOwner(myWallet.publicKey, {
+        mint: new PublicKey(tokenMint),
       });
-      throw new Error(`Token has 0 balance - Already sold elsewhere. Removing from tracking.`);
-    }
 
-    // Verify amount with tokenBalance
-    if (totalBalance !== BigInt(amount)) {
-      throw new Error(`Wallet and tracker balance mismatch. Sell manually and token will be removed during next price check.`);
-    }
+      //Check if token exists in wallet with non-zero balance
+      const totalBalance = tokenAccounts.value.reduce((sum, account) => {
+        const tokenAmount = account.account.data.parsed.info.tokenAmount.amount;
+        return sum + BigInt(tokenAmount); // Use BigInt for precise calculations
+      }, BigInt(0));
 
+      // Verify returned balance
+      if (totalBalance <= 0n) {
+        await removeHolding(tokenMint).catch((err) => {
+          console.log("⛔ Database Error: " + err);
+        });
+        throw new Error(`Token has 0 balance - Already sold elsewhere. Removing from tracking.`);
+      }
+
+      // Verify amount with tokenBalance
+      if (totalBalance !== BigInt(amount)) {
+        throw new Error(`Wallet and tracker balance mismatch. Sell manually and token will be removed during next price check.`);
+      }
+    }
     // Request a quote in order to swap SOL for new token
     const quoteResponse = await axios.get<QuoteResponse>(quoteUrl, {
       params: {
@@ -667,14 +754,21 @@ export async function createSellTransaction(solMint: string, tokenMint: string, 
     var transaction = VersionedTransaction.deserialize(swapTransactionBuf);
 
     // sign the transaction
-    transaction.sign([myWallet.payer]);
+    if (!config.rug_check.simulation_mode)
+      transaction.sign([myWallet.payer]);
 
-    // Execute the transaction
-    const rawTransaction = transaction.serialize();
-    const txid = await connection.sendRawTransaction(rawTransaction, {
-      skipPreflight: true, // If True, This will skip transaction simulation entirely.
-      maxRetries: 2,
-    });
+    let txid = ""
+
+    if (!config.rug_check.simulation_mode) {
+      // Execute the transaction
+      const rawTransaction = transaction.serialize();
+      txid = await connection.sendRawTransaction(rawTransaction, {
+        skipPreflight: true, // If True, This will skip transaction simulation entirely.
+        maxRetries: 2,
+      });
+    } else {
+      txid = "Simulated Sell"
+    }
 
     // Return null when no tx was returned
     if (!txid) {
@@ -685,15 +779,17 @@ export async function createSellTransaction(solMint: string, tokenMint: string, 
     const latestBlockHash = await connection.getLatestBlockhash();
 
     // Fetch the current status of a transaction signature (processed, confirmed, finalized).
-    const conf = await connection.confirmTransaction({
-      blockhash: latestBlockHash.blockhash,
-      lastValidBlockHeight: latestBlockHash.lastValidBlockHeight,
-      signature: txid,
-    });
+    if (!config.rug_check.simulation_mode) {
+      const conf = await connection.confirmTransaction({
+        blockhash: latestBlockHash.blockhash,
+        lastValidBlockHeight: latestBlockHash.lastValidBlockHeight,
+        signature: txid,
+      });
 
-    // Return null when an error occured when confirming the transaction
-    if (conf.value.err || conf.value.err !== null) {
-      throw new Error("Transaction was not successfully confirmed!");
+      // Return null when an error occured when confirming the transaction
+      if (conf.value.err || conf.value.err !== null) {
+        throw new Error("Transaction was not successfully confirmed!");
+      }
     }
 
     // Delete holding
@@ -713,4 +809,4 @@ export async function createSellTransaction(solMint: string, tokenMint: string, 
       tx: null,
     };
   }
-}
+}tokenSolFeePaidUSDC

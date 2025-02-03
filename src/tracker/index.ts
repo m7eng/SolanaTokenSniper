@@ -14,6 +14,9 @@ dotenv.config();
 // Create Action Log constant
 const actionsLogs: string[] = [];
 
+// Simulation metrics
+let commulativePnL = 0;
+
 async function main() {
   const priceUrl = process.env.JUP_HTTPS_PRICE_URI || "";
   const dexPriceUrl = process.env.DEX_HTTPS_LATEST_TOKENS || "";
@@ -76,19 +79,20 @@ async function main() {
         const currentPricesDex: LastPriceDexReponse = priceResponseDex.data;
 
         // Get raydium legacy pairs prices
-        dexRaydiumPairs = currentPricesDex.pairs
-          .filter((pair) => pair.dexId === "raydium")
-          .reduce<Array<(typeof currentPricesDex.pairs)[0]>>((uniquePairs, pair) => {
-            // Check if the baseToken address already exists
-            const exists = uniquePairs.some((p) => p.baseToken.address === pair.baseToken.address);
+        dexRaydiumPairs = Array.isArray(currentPricesDex.pairs)
+          ? currentPricesDex.pairs
+            .filter((pair) => pair.dexId === "raydium")
+            .reduce<Array<(typeof currentPricesDex.pairs)[0]>>((uniquePairs, pair) => {
+              const exists = uniquePairs.some((p) => p.baseToken.address === pair.baseToken.address);
 
-            // If it doesn't exist or the existing one has labels, replace it with the no-label version
-            if (!exists || (pair.labels && pair.labels.length === 0)) {
-              return uniquePairs.filter((p) => p.baseToken.address !== pair.baseToken.address).concat(pair);
-            }
+              if (!exists || (pair.labels && pair.labels.length === 0)) {
+                return uniquePairs.filter((p) => p.baseToken.address !== pair.baseToken.address).concat(pair);
+              }
 
-            return uniquePairs;
-          }, []);
+              return uniquePairs;
+            }, [])
+          : [];
+
 
         if (!currentPrices) {
           saveLogTo(actionsLogs, `⛔ Latest prices from Dexscreener Tokens API could not be fetched. Trying again...`);
@@ -139,6 +143,9 @@ async function main() {
 
             // Sell via Take Profit
             if (unrealizedPnLPercentage >= config.sell.take_profit_percent) {
+              commulativePnL += unrealizedPnLUSDC;
+
+
               try {
                 const result: createSellTransactionResponse = await createSellTransaction(config.liquidity_pool.wsol_pc_mint, token, amountIn);
                 const txErrorMsg = result.msg;
@@ -153,10 +160,13 @@ async function main() {
               } catch (error: any) {
                 saveLogTo(actionsLogs, `⚠️  ERROR when taking profit for ${tokenName}: ${error.message}`);
               }
+
             }
 
             // Sell via Stop Loss
             if (unrealizedPnLPercentage <= -config.sell.stop_loss_percent) {
+              commulativePnL += unrealizedPnLUSDC;
+
               try {
                 const result: createSellTransactionResponse = await createSellTransaction(config.liquidity_pool.wsol_pc_mint, token, amountIn);
                 const txErrorMsg = result.msg;
@@ -171,10 +181,11 @@ async function main() {
               } catch (error: any) {
                 saveLogTo(actionsLogs, `\n⚠️ ERROR when triggering Stop Loss for ${tokenName}: ${error.message}: \n`);
               }
+
             }
           }
 
-          // Get the current price
+          // Get the current pricek
           saveLogTo(
             holdingLogs,
             `${hrTradeTime}: Buy $${tokenSolPaidUSDC.toFixed(2)} | ${iconPnl} Unrealized PnL: $${unrealizedPnLUSDC.toFixed(
@@ -191,13 +202,19 @@ async function main() {
     console.log("================================================================================");
     if (holdings.length === 0) console.log("No token holdings yet as of", new Date().toISOString());
     console.log(holdingLogs.join("\n"));
-
+    // Simulation Metrics Output
+    if (config.rug_check.simulation_mode) {
+      console.log("\n🚨 Simulation Mode is enabled. No real transactions will be made.");
+      console.log("================================================================================");
+      console.log(`Overall realized PNL: ${commulativePnL.toFixed(2)} $`);
+    }
     // Output Action Logs
+    if(config.sell.verbose_log){
     console.log("\n\n📜 Action Logs");
     console.log("================================================================================");
     console.log("Last Update: ", new Date().toISOString());
     console.log(actionsLogs.join("\n"));
-
+    }
     // Output wallet tracking if set in config
     if (config.sell.track_public_wallet) {
       console.log("\nCheck your wallet: https://gmgn.ai/sol/address/" + config.sell.track_public_wallet);

@@ -31,6 +31,11 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# not finished
+priceChecker.ts
+
 # Project Personal Files
 holdings.db
 myConfig.ts
+notes.txt
+push.sh
